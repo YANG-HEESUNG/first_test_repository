@@ -1,0 +1,48 @@
+(답안)
+
+--  세미조인으로 처리
+
+
+-- 인덱스 생성
+CREATE INDEX YOON.PRODUCT53_IDX_01 ON T_PRODUCT53(M_CODE);
+CREATE INDEX YOON.ORDER53_TDX_01 ON T_ORDER53 (PROD_ID, ORDER_DT);
+
+ALTER SESSION SET STATISTICS_LEVEL = ALL;
+
+SELECT C.M_CODE, C.M_NM
+FROM   T_MANUF53 C
+WHERE  EXISTS 
+                         (SELECT 1
+		 FROM   T_PRODUCT53 B
+	             WHERE  B.M_CODE = C.M_CODE
+		   AND EXISTS 
+                                                 (SELECT 1
+			           FROM  T_ORDER53 A
+			         WHERE  A.PROD_ID = B.PROD_ID
+			             AND   A.ORDER_DT >= '20090101'));
+
+select * from table(dbms_xplan.display_cursor(null, null, 'iostats last'));
+
+=> 
+Plan hash value: 1063726055
+ 
+---------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                     | Name             | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |
+---------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT              |                  |      1 |        |     50 |00:00:23.44 |    6358 |   2737 |
+|*  1 |  FILTER                       |                  |      1 |        |     50 |00:00:23.44 |    6358 |   2737 |
+|   2 |   TABLE ACCESS FULL           | T_MANUF53        |      1 |     50 |     50 |00:00:00.01 |       2 |      0 |
+------------------------ SEMI JOIN ------------------------------------------------------------------
+|   3 |   NESTED LOOPS SEMI           |                  |     50 |      2 |     50 |00:00:23.44 |    6356 |   2737 |  
+-----------------------------------------------------------------------------------------------------
+|   4 |    TABLE ACCESS BY INDEX ROWID| T_PRODUCT53      |     50 |    200 |   2572 |00:00:00.63 |    1134 |     21 |
+|*  5 |     INDEX RANGE SCAN          | PRODUCT53_IDX_01 |     50 |        |   2572 |00:00:00.57 |     107 |     20 |
+|*  6 |    INDEX RANGE SCAN           | ORDER53_TDX_01   |   2572 |    196K|     50 |00:00:22.79 |    5222 |   2716 |
+---------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter( IS NOT NULL)
+   5 - access("B"."M_CODE"=:B1)
+   6 - access("A"."PROD_ID"="B"."PROD_ID" AND "A"."ORDER_DT">='20090101' AND "A"."ORDER_DT" IS NOT NULL)

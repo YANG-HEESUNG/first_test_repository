@@ -1,0 +1,307 @@
+-- 3주차 요약
+
+1. 전통적인 방식의 Update
+   update 고객 c
+        set (최종거래일시, 최근거래횟수, 최근거래금액)
+               (select max(거래일시), count(*), sum(거래금액)
+                   from 거래
+                  where 고객번호 = c.고객번호
+                      and 거래일시 >= trunc(add_months(sysdate - 1))
+               )
+   where exists (select 1 from 거래
+                       where 고객번호 = c.고객번호
+                           and 거래일시 >= trunc(add_months(sysdate -1))
+                      );
+  
+    * 거래 테이블 Set 절에서 1번 where 절에서 1번 총 2회 Access
+
+
+2. 수정가능 조인 뷰
+     update /*+ bypass_ujvc */ 고객  c
+        (select /*+ ordered use_hash(c)
+            from (select 고객번호, max(거래일시) 거래일시, count(*) 거래횟수, sum(거래금액) 거래금액
+                       from 거래
+                    where 고객번호 = c.고객번호
+                        and 거래일시 >= trunc(add_months(sysdate - 1))
+                    group by 고객번호) t, 고객 c
+          where c.고객번호 = t.고객번호
+       )
+   set 최종거래일시 = 거래일시
+      , 최근거래횟수 = 거래횟수
+      , 최근거래금액 = 거래금액
+
+   * 1번의 조인으로 Update
+
+
+3. bypass_ujvc 힌트-1
+   
+  - emp, dept 테이블에서 수정 가능한 View가 되기 위해서는
+    . dept 테이블에 deptno로 된 PK 설정 필요
+    . emp 테이블은 "키-보존 테이블(Key-Preserved Table)"
+    . dept 테이블은 "비 키-보존 테이블(Non Key-Preserved Table)" 
+    . 즉 키-보존 테이블만 변경 가능
+
+
+4. bypass_ujvc 힌트-2
+  - bypass_ujvc [bypass Updatable Join View Check] : 수정가능 뷰 체크를 생략
+  - DBMS는 확인 불가능 해도, 사람에게 Check를 넘기는 힌트
+  - 반드시 Update를 위해 참조하는 집합에 중복 레코드가 없을 (1쪽 집합) 때만 사용 필요
+
+  [11g Merge 사용]
+   MERGE  INTO YOON.TEST1 T1
+   USING YOON.TEST2 T2
+        ON (T1.C1 = T2.C1)
+    WHEN MATHCED THEN UPDATE SET T1.C2= T2.C3
+
+
+ 5. 누적매출구하기
+  - SELECT T1.지점, T1.판매월
+               , MIN(T1.매출액) 매출액  -- 큰쪽
+               ,SUM(T2.매출액) 누적액  -- 작은쪽
+     FROM 누적매출_예제 T1, 누적매출_예제 t2
+  WHERE T2.지점 = T1.지점
+       AND T2.판매월 <= T1.판매월
+  GROUP BY T1.지점, T1.판매월  -- 큰쪽
+
+  * 윈도우 함수 활용(Oracle 8i 부터)
+    SELECT 지점, 판매월, 매출액
+               SUM(매출액) OVER (PARTITION BY 지점  ORDER BY 판매월
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) 누적액
+       FROM 누적매출_예제
+   ;
+
+
+6. 윈도우 함수-1
+
+   - 순위
+     . RANK, DENSE_RANK, ROW_NUMBER
+   - 집계
+     . SUM, MAX, MIN, AVG, COUNT
+   - 행순서
+    . FIRST_VALUE, LAST_VALUE
+    . LAG, LED
+  - 비율
+   . CUME_DIST
+   . PERCENT_RANK
+   . RATIO_TO_REPORT
+   . NTILE
+
+  
+6. 윈도우 함수-2
+  
+  - between 사용 시
+    . Rows betwen (unbounded preceding / 10 preceding / current row) and (current row / unbounded following / 10 following)
+    . range betwen (unbounded preceding / 10 preceding / current row) and (current row / unbounded following / 10 following)
+     
+  - between 미사용
+    . rows: 현재row 기준
+    . range: 현재 값 기준
+	  
+7. 선분이력 끊기
+  
+ - 월말기준으로 선분을 끊는 경우
+   
+
+8.데이터 복제를 통한 소계 구하기-1
+ - select b.no
+           , a.deptno
+           , a.empno
+           , a.sal
+      from emp a,
+            (select rownum no from dual
+                connect by level <= 2 
+           ) b;
+
+
+9.데이터 복제를 통한 소계 구하기-2
+
+ - Rollup 함수 활용 단순하게 작성
+    select deptno
+           , case when groupping(empno) = 1 and grouping(deptno) = 1  then '총계'
+                     when groupping(empno) = 1                                      then '부서계'
+                     else  to_char(empno)
+             end                 사원번호
+          , sum(sal)           급여합
+         , round(avg(sal))  급여평균 
+      from emp a
+    group by rollup(deptno, empno)
+    order by deptno, 사원번호
+  ;
+
+
+10. 상호배타적 관계의 조인
+ - 아크일때 물리 코젤의 2가지 상황
+ - 외래키 분리방법
+ - 외래키 통합방법
+   
+  (a).상품권결제 인덱스 [결제일자 + 상품권구분] 일 경우 튜닝
+
+  select a.주문금액, a.결제일자, a.결제금액
+          , a.상품권번호
+          , nvl(b.발행일시, c.발행일시) 발행일시
+     from 상품권결제 a, 온라인권 b, 실권 c
+    were a.결제일자 between :date1 and :date2
+      and b.온라인권번호(+) = decode(a.상품권구분, '1', a.상품권번호)
+      and c.실권번호      (+) = decode(a.상품권구분, '2', a.상품권번호)
+  
+  (b).상품권결제 인덱스 [상품권구분 + 결제일자] 일 경우 튜닝
+
+  select a.주문금액, a.결제일자, a.결제금액, a.상품권번호
+          , b.발행일시
+     from 상품권결제 a, 온라인권 b
+    were a.상품권구분 = '1'
+      and a.결제일자 between :date1 and :date2
+      and b.온라인권번호 = a.상품권번호
+  union all 
+  select a.주문금액, a.결제일자, a.결제금액, a.상품권번호
+          , b.발행일시
+     from 상품권결제 a, 실권 b
+    were a.상품권구분 = '2'
+      and a.결제일자 between :date1 and :date2
+      and b.실권번호 = a.상품권번호
+  
+
+11. 최종 출력 건에 대해서만 조인하기-1
+
+    * 아래 2개의 SQL의 일 량은 동일
+
+     -- 1.    
+      slect 주문번호, 주문고객번호, 판매사원번호, 판매부서번호, 주문금액
+       from (select rowid  r_id
+                  from 주문 n
+                 where 판매부서번호 = 'D004'
+             ) x, 주문 o
+      where o.rowid = x.r_id
+
+    -- 2.
+     select 주문번호, 주문고객번호, 판매사원번호, 판매부서번호, 주문금액
+        from 주문
+     where 판매부서번호 = 'D004'
+
+
+12. 최종 출력 건에 대해서만 조인하기 (P370)
+   
+  * 일반적인 게시판 출력 조인 방식
+
+
+13. 징검다리 테이블 조인을 이용한 튜인
+         
+ 
+
+14. 점이력 조회 (Page 377)
+  
+   - 특정 상품에 최종 건 찾기
+   
+   - SELECT *
+         FROM (SELECT /*+ INDEX_DESC(X PK_상품변경이력_59) */
+                                상품id, 변경일자, 순번, 상태코드, 상품가격
+                              , ROW_NUMBER() over (partition by 상품ID ORDER BY 변경일자 DESC, 순번 DESC) R_NUM
+                      FROM 상품변경이력_59 X
+                    WHERE 상품ID = '1'
+                  ) 
+     WHERE  R_NUM = 1;
+
+
+15. 고급 SQL튜닝
+     - CASE문 활용
+     - 데이터 복제 기법 활용
+     - Union All을 활용한 M:M 관계의 조인
+     - With 구문 활용
+
+
+16. CASE문 활용 (Page 386)
+    - 월별 납입방법별 집계 테이블 5회 반복 Access
+    - 1회만 Access 하도록 튜닝 필요
+
+ 
+17. Union All을 활용한 M:M 관계의 조인 (Page 388)
+    - Full Outer Join을 대체할 용도로 Union All 활용가능
+    - 아래 테이블을 이용 월별로 각 상품의 계획대비 판매 실적 집계
+    - 상품, 연월 기준으로 M:M  관계
+    - 조인시 카티션 곱(Cartesian Product) 발생
+
+    - Union All 활용
+
+      select 부서번호, 년월
+             , nvl(max(계획금액),0) 계획금액, nvl(max(실적금액),0)  실적금액
+         from (
+                 select 부서번호, 년월, 계획금액, to_number(null) 실적금액
+                    from 계획
+                  where 부서 = '10'
+                     and 년월 between '202001' and '202007'
+                    
+                  union all
+                 select 부서번호, 년월, to_number(null) 계획금액,  실적금액
+                    from 실적
+                  where 부서 = '10'
+                     and 년월 between '202001' and '202007'
+                )
+     group by 부서번호, 년월;
+
+
+18. With구문 활용
+    - With 절 처리시 DBMS 내부 실행 방식 2가지
+      . Materalize 방식: 내부적으로 임시 테이블을 생성함으로써 반복 재사용
+      . Inline 방식: 참조된 횟수만큼 런타임 시 반복 수행, 코딩량 감소
+                         In-Line View와 다른점은 Main Query에서 자주 참조 가능
+   - 2가지 방식의 선택은 옵티마이저 선택 또는 힌트 가능(materalize, inline)
+   - Materalize 방식은 with절을 선언한 SQL 종료시 해제
+   - With절 2개 이상 선언 가능
+   - With절 내에서 다르 With절 참조 가능
+
+
+19. 소트를 발생시키는 오퍼레이션
+   - Sort Aggregation     
+     . 전체 로우를 대상으로 집계를 수행할 때 발생 
+     ※ 실행계획에 sort라는 표현을 사용하지만 실제 소트가 발생하지 않는다.
+   - Sort Order by
+     . order by 절 사용
+   - Sort Group by
+     . Sorting 알고리즘을 사용해 그룹별 집계를 수행할 때 발생
+   - Sort Unique
+     . Unnesting된 서브쿼리가 M쪽 집합이거나, 인덱스스가 없거나
+     . 세미조인으로 수행되지 않는다면
+     . 메인쿼리와 조인되기 전에 중복 레코드 제거를 위해 sort unique 오퍼레이션이 먼저 수해ㅣㅇ
+   - Sort Join
+     .소트머지 종딘을 수행할 때 발생
+   - Window Sort
+     . 분석함수(Analytic Function)를 수행할 때 발생
+
+
+20. 소트튜닝 요약
+   - 데이터 모델 측면에서의 검토
+   - 소트가 발생하지 않도록 SQL 작성
+   - 인덱스를 이용한 소트 연산 대체
+   - Sort Area를 적게 사용하도록 SQL 작성
+   - Sort Area 크기 조정
+
+21. 소트가 발생하지 않도록 SQL 작성
+   - Union을  Union All로 대체
+   - Distinct를 Exist로 대체
+   - 불필요한 Count 연산 제거
+
+
+22. 인덱스를 이용한 소트 연산 대체 (Page 410)
+  
+
+23. Sort Area를 적게 사용하도록 SQL 작성
+   - 소트를 완료하고 데이터 가공하기
+   - Top-N 쿼리
+      .Stopkey 작동
+      .Stopkey 미작동 
+
+
+ 
+  
+
+            
+
+  
+  
+
+  
+
+
+
+
+    

@@ -1,0 +1,43 @@
+﻿-- 인덱스추가 
+CREATE INDEX YOON.IX_T_PRODUCT_02  ON YOON.T_PRODUCT (M_CODE,PROD_ID,PROD_NM);
+CREATE INDEX YOON.IX_T_ORDER_02    ON YOON.T_ORDER  (PROD_ID, ORDER_DT, ORDER_QTY);
+
+-- 쿼리문실행
+-- (힌트절 변경)
+-- 변경전: /*+ ORDERED  USE_NL(P) USE_NL(O) */
+-- 변경후: /*+ ORDERED  INDEX(P IX_T_PRODUCT_02) INDEX(O IX_T_ORDER_02) USE_NL(P) USE_NL(O) */
+
+SELECT  /*+ ORDERED  INDEX(P IX_T_PRODUCT_02) INDEX(O IX_T_ORDER_02) USE_NL(P) USE_NL(O) */
+       P.PROD_NM, P.PROD_ID, O.ORDER_QTY
+FROM   T_MANUF M, T_PRODUCT P,  T_ORDER O
+WHERE  M.M_CODE BETWEEN 'M00001' AND 'M00100'
+ AND   P.M_CODE  = M.M_CODE
+ AND   O.PROD_ID = P.PROD_ID
+ AND   O.ORDER_DT = '20160412'
+ AND   O.ORDER_QTY > 9000;
+
+
+-- DBMS_XPLAN
+select * from table(DBMS_XPLAN.DISPLAY_CURSOR(NULL,NULL,'IOSTATS LAST'));
+
+
+-- 
+------------------------------------------------------------------------------------------------
+| Id  | Operation          | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |                 |      1 |        |     32 |00:00:00.02 |   20315 |
+|   1 |  NESTED LOOPS      |                 |      1 |      1 |     32 |00:00:00.02 |   20315 |
+|   2 |   NESTED LOOPS     |                 |      1 |      1 |  10000 |00:00:00.01 |     312 |
+|*  3 |    INDEX RANGE SCAN| PK_T_MANUF      |      1 |      1 |    100 |00:00:00.01 |       2 |
+|*  4 |    INDEX RANGE SCAN| IX_T_PRODUCT_02 |    100 |      1 |  10000 |00:00:00.01 |     310 |
+|*  5 |   INDEX RANGE SCAN | IX_T_ORDER_02   |  10000 |      1 |     32 |00:00:00.02 |   20003 |
+------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   3 - access("M"."M_CODE">='M00001' AND "M"."M_CODE"<='M00100')
+   4 - access("P"."M_CODE"="M"."M_CODE")
+       filter(("P"."M_CODE"<='M00100' AND "P"."M_CODE">='M00001'))
+   5 - access("O"."PROD_ID"="P"."PROD_ID" AND "O"."ORDER_DT"='20160412' AND 
+              "O"."ORDER_QTY">9000 AND "O"."ORDER_QTY" IS NOT NULL)

@@ -1,0 +1,25 @@
+
+
+1. 인덱스 매칭도와 Table Random I/O 비효율 제거를 위한 인덱스 구성
+   - T_MANUF   : M_CODE
+   - T_PRODUCT : M_CODE
+   - T_ORDER   : PROD_ID + ORDER_DT + ORDER_QTY
+
+2. SQL을 수정하지 말라고 하였습니다.
+   실행계획은 3개 테이블 모두 인덱스만 읽었습니다.
+   따라서 테이블을 Access 하지 않도록 인덱스에 칼럼을 추가 해야 합니다.
+   - T_MANUF : select 절에 없으며, P_PRODUCT 테이블과 조인을 위해 던져주는 칼럼또한
+               M_CODE만 존재 합니다.  따라서 인덱스는 1번과 같이 하면 됩니다.
+
+   - T_PRODUCT : T_ORDER와 조인을 위해 던지는 PROD_ID 칼럼 인덱스 추가
+                 SELECT 절에서 읽는 PROD_NM 추가
+                 즉,  M_CODE + PROD_ID + PROD_NM 으로 인덱스 구성
+                 여기서 PROD_ID 칼럼과 PROD_NM 칼럼의 순서는 바뀌어도 무방합니다.
+
+   - T_ORDER   : 조인을 위해 던져주는 칼럼 없음
+                 SELECT 절에서 읽는 칼럼 역시 인덱스에 기 존재
+
+최종 정답
+   - T_MANUF   : M_CODE
+   - P_PRODUCT : M_CODE + PROD_ID + PROD_NM 
+   - T_ORDER   : PROD_ID + ORDER_DT + ORDER_QTY

@@ -1,0 +1,147 @@
+/*
+PRIMARY KEY : CUST_NO
+인덱스      : CUST_CD + FLAG + DIV
+
+T_CUST22  200만건
+  - CUST_CD   2000개 종류(001 ~ 200),  코드당 건수는 약  1만건 
+  - DIV       100개 종류(001 ~ 100),  코드당 건수는 약  2만건
+  - FLAG      100개  종류,    코드당 건수는 약 20만건
+
+-----------------------------------------------------------------------------------------------
+| Id  | Operation                   | Name           | Starts | A-Rows |   A-Time   | Buffers |
+-----------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT            |                |      1 |    125 |00:00:00.01 |     470 |
+|   1 |  TABLE ACCESS BY INDEX ROWID| T_CUST22       |      1 |    125 |00:00:00.01 |     470 |
+|*  2 |   INDEX RANGE SCAN          | IX_T_CUST22_01 |      1 |    125 |00:00:00.01 |     345 |
+-----------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - access("CUST_CD">='190' AND "FLAG"='160' AND "CUST_CD"<='200')
+       filter(("FLAG"='160' AND INTERNAL_FUNCTION("DIV")))
+ 
+  
+아래 SQL을 보고 튜닝 하시오(인덱스 및 SQL변경 가능)
+*/
+
+SELECT *
+FROM T_CUST22 
+WHERE  CUST_CD BETWEEN '190' AND '200' 
+AND   DIV IN ('30', '40', '50', '60', '20')
+AND   FLAG = '160'
+;
+
+=========================================>
+-- 200만건을 Insert 하려니 아래와 같이 오류가 발생하여, 100만건만 Insert 하고테스트 하였습니다. 
+CONNECT BY LEVEL <= 2000000
+ORDER BY DBMS_RANDOM.RANDOM()
+오류 보고 -
+ORA-30009: Not enough memory for CONNECT BY operation
+
+
+-- 100만건만 Insert
+INSERT /*+ APPEND */ INTO T_CUST22
+SELECT LPAD(TO_CHAR(ROWNUM), 7, '0')                                    CUST_NO
+     , RPAD(TO_CHAR(ROUND(DBMS_RANDOM.VALUE(1, 65000))), 10, '0')       CUS_NM
+     , LPAD(TO_CHAR(ROUND(DBMS_RANDOM.VALUE(1, 2000))) || '0', 3, '0')  CUST_CD
+     , LPAD(TO_CHAR(ROUND(DBMS_RANDOM.VALUE(1, 100))) || '0', 3, '0')   FLAG
+     , LPAD(TO_CHAR(ROUND(DBMS_RANDOM.VALUE(1, 100)))  || '0', 2, '0')  DIV
+     , 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'                                     C1
+     , 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'                                     C2
+     , 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'                                     C3
+     , 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'                                     C4
+     , 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'                                     C5
+FROM DUAL
+CONNECT BY LEVEL <= 1000000
+ORDER BY DBMS_RANDOM.RANDOM()
+;
+
+
+
+-- sqlplus 접속
+SQL> conn system / sqlp
+Connected.
+SQL> set linesize 200
+SQL> set pagesize 200
+SQL> set autotrace  traceonly explain
+SQL>
+
+
+-- 최초 제시된 상황에서 Plan
+
+SQL> SELECT *
+  2  FROM T_CUST22
+  3  WHERE  CUST_CD BETWEEN '190' AND '200'
+  4  AND   DIV IN ('30', '40', '50', '60', '20')
+  5  AND   FLAG = '160'
+  6
+SQL> /
+
+--  INDEX SKIP SCAN  으로 처리됨을 볼수 있습니다.
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 3004213515
+----------------------------------------------------------------------------------------------
+| Id  | Operation                   | Name           | Rows  | Bytes | Cost (%CPU)| Time     |
+----------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT            |                |     7 |  1155 |    21   (0)| 00:00:01 |
+|   1 |  TABLE ACCESS BY INDEX ROWID| T_CUST22       |     7 |  1155 |    21   (0)| 00:00:01 |
+|*  2 |   INDEX SKIP SCAN           | IX_T_CUST22_01 |     7 |       |    14   (0)| 00:00:01 |
+----------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   2 - access("CUST_CD">='190' AND "FLAG"='160' AND "CUST_CD"<='200')
+       filter("FLAG"='160' AND ("DIV"='20' OR "DIV"='30' OR "DIV"='40' OR "DIV"='50'
+              OR "DIV"='60'))
+
+SQL>
+
+
+-- 인덱스를 아래와 같이 수정하였습니다.
+-- (현재 인덱스가  CUST_CD + FLAG + DIV 로 되어있어 
+--첫 선조건은 DRIVING, 그 이후에 DIV, FLAG는 Check조건 이므로
+--모두 DRIVING(점조건)으로 처리되도록 인덱스로 변경하여야 합니다)
+--<수정전> CUST_CD + FLAG + DIV
+--<수정후> FLAG + DIV + CUST_CD
+
+
+-- 기존인덱스 삭제
+DROP INDEX IX_T_CUST22_01;
+-- 새로운 인덱스 생성
+CREATE INDEX IX_T_CUST22_02 ON T_CUST22(FLAG, DIV, CUST_CD);
+
+
+SQL> SELECT *
+  2  FROM T_CUST22
+  3  WHERE  CUST_CD BETWEEN '190' AND '200'
+  4  AND   DIV IN ('30', '40', '50', '60', '20')
+  5  AND   FLAG = '160'
+  6
+SQL> /
+
+--  INDEX RANGE SCAN  으로 실행됨을 알수 있습니다.
+-- (Cost 도 감소되었음을 알수 있습니다 21 --> 14)
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 2804911487
+-----------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name           | Rows  | Bytes | Cost (%CPU)| Time     |
+--------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |                |     7 |  1155 |    14(0)| 00:00:01 |
+|   1 |  INLIST ITERATOR             |                |       |       |   |          |
+|   2 |   TABLE ACCESS BY INDEX ROWID| T_CUST22       |     7 |  1155 |    14(0)| 00:00:01 |
+|*  3 |    INDEX RANGE SCAN          | IX_T_CUST22_02 |     7 |       |     7(0)| 00:00:01 |
+-----------------------------------------------------------------------------------------------
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   3 - access("FLAG"='160' AND ("DIV"='20' OR "DIV"='30' OR "DIV"='40' OR "DIV"='50'
+              OR "DIV"='60') AND "CUST_CD">='190' AND "CUST_CD"<='200')
+SQL>
+
+
+-- 감사합니다.
